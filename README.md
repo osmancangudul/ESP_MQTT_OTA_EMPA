@@ -1,6 +1,6 @@
 
-| Tested Targets | ESP32-C3 | ESP32-C6 |
-| ----------------- | -------- | -------- |
+| Tested Targets | ESP32-C3 |
+| ----------------- | -------- |
 
 # ESP-MQTT_OTA_EXAMPLE
 
