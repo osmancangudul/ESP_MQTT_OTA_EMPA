@@ -38,8 +38,7 @@ idf.py -p PORT flash monitor
 ### Testing MQTT and OTA
 
 #### Step 1: Understanding MQTT Protocol
-In MQTTX we will send our messages to the topic `test/empa/message`. This code will parse the received message in order to received type. Template of the recommended message is in below:
-
+"In MQTTX, we will send our messages to the topic `test/empa/message`. This code will parse the received message to determine its type. Below is the template of the recommended message:
 ```
 {
   "type": 0,
@@ -47,7 +46,7 @@ In MQTTX we will send our messages to the topic `test/empa/message`. This code w
 }
 ```
 
-Type 0 is for normal messages, which device will only print them to the monitor. For OTA we need to use type 1 and we need a "Direct Download Link" for the message section.
+Type 0 is for normal messages, where the device will only print them to the monitor. For OTA, we need to use type 1 and provide a "Direct Download Link" in the message section.
 ```
 {
   "type": 1,
@@ -57,12 +56,12 @@ Type 0 is for normal messages, which device will only print them to the monitor.
 
 #### Step 2: Generating a Direct Link For OTA
 
-For downloading a OTA ESP needs a direct download link. We can use google drive to store a binary file. Then for generating a direct download link we can use this site (Notes are important):
+To download an OTA (Over-The-Air) update, ESP needs a direct download link. We can use Google Drive to store the binary file. Then, to generate a direct download link, we can use this site (Note are important in below side):
 ```
 https://sites.google.com/site/gdocs2direct/
 ```
 
-When you have the direct link you can pass it to the MQTT message and publish it to the device.
+When you have the direct link, you can pass it to the MQTT message and publish it to the device.
 
 ## Example Output
 
