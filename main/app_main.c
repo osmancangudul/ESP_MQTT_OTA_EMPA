@@ -198,7 +198,7 @@ static void mqtt_app_start(void)
             switch (type->valueint)
             {
             case 0: // Normal message job
-                ESP_LOGI(TAG, "Message Received : %s", parsed_message->string);
+                ESP_LOGI(TAG, "Message Received : %s", parsed_message->valuestring);
                 cJSON_Delete(json);
                 received_command = 0;
                 break;
@@ -210,6 +210,8 @@ static void mqtt_app_start(void)
                 esp_http_client_config_t config = {
                     .url = parsed_message->valuestring,
                     .skip_cert_common_name_check = true,
+                    .buffer_size = 1024 * 12,
+                    .buffer_size_tx = 1024 * 12,
                     .event_handler = _http_event_handler,
                     .keep_alive_enable = true,
                 };
@@ -239,6 +241,10 @@ static void mqtt_app_start(void)
                 break;
             }
         }
+        else
+        {
+            vTaskDelay(100);
+        }
     }
 }
 
@@ -259,6 +265,7 @@ void app_main(void)
     ESP_LOGI(TAG, "[APP] Startup..");
     ESP_LOGI(TAG, "[APP] Free memory: %" PRIu32 " bytes", esp_get_free_heap_size());
     ESP_LOGI(TAG, "[APP] IDF version: %s", esp_get_idf_version());
+    //ESP_LOGI(TAG, "ESP_OTA_VERSION");
 
     esp_log_level_set("*", ESP_LOG_INFO);
     esp_log_level_set("mqtt_client", ESP_LOG_VERBOSE);
