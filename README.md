@@ -4,7 +4,7 @@
 
 # ESP-MQTT_OTA_EXAMPLE
 
-This project aims to demonstrate how to implement Over-The-Air (OTA) firmware updates for IoT devices using the MQTT (Message Queuing Telemetry Transport) protocol.OTA updates play a crucial role in the maintenance and improvement of IoT devices by enabling remote firmware upgrades, bug fixes, and feature enhancements without the need for physical intervention.
+This project aims to demonstrate how to implement Over-The-Air (OTA) firmware updates for IoT devices using the MQTT (Message Queuing Telemetry Transport) protocol. OTA updates play a crucial role in the maintenance and improvement of IoT devices by enabling remote firmware upgrades, bug fixes, and feature enhancements without the need for physical intervention.
 
 ## Requirments
 
@@ -178,3 +178,4 @@ I (436) MQTT_EXAMPLE: ESP_OTA_VERSION
 
 ## To-Do
 * Comments will be added.
+* Testing in other Devices
