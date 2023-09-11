@@ -8,7 +8,7 @@ This project aims to demonstrate how to implement Over-The-Air (OTA) firmware up
 
 ## Requirments
 
-* ESP-IDF 5.1
+* ESP-IDF 5.1 ( Other versions might work but API's can be different)
 * MQTTX (MQTT Testing Envoirment)
 * Google Drive (OTA binary file)
 
