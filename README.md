@@ -175,3 +175,6 @@ I (426) MQTT_EXAMPLE: [APP] IDF version: v5.1-dirty
 I (436) MQTT_EXAMPLE: ESP_OTA_VERSION
 
 ```
+
+## To-Do
+1- Comments will be added.
