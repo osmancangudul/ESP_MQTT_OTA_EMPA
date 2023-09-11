@@ -177,4 +177,4 @@ I (436) MQTT_EXAMPLE: ESP_OTA_VERSION
 ```
 
 ## To-Do
-1- Comments will be added.
+* Comments will be added.
