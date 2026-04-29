@@ -1,0 +1,18 @@
+# ESP MQTT OTA - Custom Partition Table
+# Flash size: 4MB
+#
+# Offset  breakdown:
+#   0x0000  - 0x7FFF  : bootloader  (32KB, handled by IDF)
+#   0x8000  - 0x8FFF  : partition table (4KB)
+#   0x9000  - 0xCFFF  : nvs         (16KB)
+#   0xD000  - 0xEFFF  : otadata     (8KB  - required for OTA rollback)
+#   0xF000  - 0xFFFF  : phy_init    (4KB)
+#   0x10000 - 0x18FFFF: ota_0       (1.5MB - active firmware slot)
+#   0x190000- 0x30FFFF: ota_1       (1.5MB - OTA update target slot)
+#
+# Name,     Type, SubType,  Offset,   Size,    Flags
+nvs,        data, nvs,      0x9000,   0x4000,
+otadata,    data, ota,      0xd000,   0x2000,
+phy_init,   data, phy,      0xf000,   0x1000,
+ota_0,      app,  ota_0,    0x10000,  0x180000,
+ota_1,      app,  ota_1,    0x190000, 0x180000,

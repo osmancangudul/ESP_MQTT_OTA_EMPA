@@ -1,0 +1,10 @@
+# ESP-IDF build output
+build/
+
+# sdkconfig is auto-generated from sdkconfig.defaults — don't track it
+sdkconfig
+sdkconfig.old
+
+# Keep these tracked:
+# sdkconfig.defaults  ← project defaults (flash size, partition table, etc.)
+# partitions.csv      ← custom partition layout

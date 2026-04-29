@@ -37,6 +37,7 @@
 #include "esp_ota_ops.h"
 #include "esp_http_client.h"
 #include "esp_https_ota.h"
+#include "esp_crt_bundle.h"
 #include <sys/socket.h>
 
 static const char *TAG = "MQTT_EXAMPLE";
@@ -49,38 +50,41 @@ static void log_error_if_nonzero(const char *message, int error_code)
     }
 }
 
-bool received_command = 0;
-uint8_t received_message[2048] = {0};
+static SemaphoreHandle_t s_msg_mutex = NULL;
+static volatile bool received_command = false;
+static uint8_t received_message[2048];
 
-#define OTA_URL_SIZE 256
+#define OTA_URL_SIZE    256
+#define OTA_MAX_RETRIES   3
+#define OTA_RETRY_DELAY_MS 5000
 
 esp_err_t _http_event_handler(esp_http_client_event_t *evt)
 {
     switch (evt->event_id)
     {
     case HTTP_EVENT_ERROR:
-        ESP_LOGD(TAG, "HTTP_EVENT_ERROR");
+        ESP_LOGE(TAG, "[HTTP] Error on transport layer");
         break;
     case HTTP_EVENT_ON_CONNECTED:
-        ESP_LOGD(TAG, "HTTP_EVENT_ON_CONNECTED");
+        ESP_LOGI(TAG, "[HTTP] Connected to server");
         break;
     case HTTP_EVENT_HEADER_SENT:
-        ESP_LOGD(TAG, "HTTP_EVENT_HEADER_SENT");
+        ESP_LOGD(TAG, "[HTTP] Request headers sent");
         break;
     case HTTP_EVENT_ON_HEADER:
-        ESP_LOGD(TAG, "HTTP_EVENT_ON_HEADER, key=%s, value=%s", evt->header_key, evt->header_value);
+        ESP_LOGD(TAG, "[HTTP] Response header: %s: %s", evt->header_key, evt->header_value);
         break;
     case HTTP_EVENT_ON_DATA:
-        ESP_LOGD(TAG, "HTTP_EVENT_ON_DATA, len=%d", evt->data_len);
+        ESP_LOGD(TAG, "[HTTP] Data chunk received, len=%d bytes", evt->data_len);
         break;
     case HTTP_EVENT_ON_FINISH:
-        ESP_LOGD(TAG, "HTTP_EVENT_ON_FINISH");
+        ESP_LOGI(TAG, "[HTTP] Response finished");
         break;
     case HTTP_EVENT_DISCONNECTED:
-        ESP_LOGD(TAG, "HTTP_EVENT_DISCONNECTED");
+        ESP_LOGI(TAG, "[HTTP] Disconnected from server");
         break;
     case HTTP_EVENT_REDIRECT:
-        ESP_LOGD(TAG, "HTTP_EVENT_REDIRECT");
+        ESP_LOGI(TAG, "[HTTP] Redirect received");
         break;
     }
     return ESP_OK;
@@ -98,55 +102,163 @@ esp_err_t _http_event_handler(esp_http_client_event_t *evt)
  */
 static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t event_id, void *event_data)
 {
-    ESP_LOGD(TAG, "Event dispatched from event loop base=%s, event_id=%" PRIi32 "", base, event_id);
+    ESP_LOGD(TAG, "[MQTT] Event base=%s id=%" PRIi32, base, event_id);
     esp_mqtt_event_handle_t event = event_data;
     esp_mqtt_client_handle_t client = event->client;
     int msg_id;
     switch ((esp_mqtt_event_id_t)event_id)
     {
     case MQTT_EVENT_CONNECTED:
-        ESP_LOGI(TAG, "MQTT_EVENT_CONNECTED");
-
+        ESP_LOGI(TAG, "=====================================");
+        ESP_LOGI(TAG, "[MQTT] Connected to broker");
+        ESP_LOGI(TAG, "[MQTT] Subscribing to: test/empa/message");
         msg_id = esp_mqtt_client_subscribe(client, "test/empa/message", 0);
-        ESP_LOGI(TAG, "sent subscribe successful, msg_id=%d", msg_id);
-
+        if (msg_id < 0) {
+            ESP_LOGE(TAG, "[MQTT] Subscribe failed");
+        } else {
+            ESP_LOGI(TAG, "[MQTT] Subscribe sent, msg_id=%d", msg_id);
+        }
+        ESP_LOGI(TAG, "=====================================");
         break;
     case MQTT_EVENT_DISCONNECTED:
-        ESP_LOGI(TAG, "MQTT_EVENT_DISCONNECTED");
+        ESP_LOGW(TAG, "[MQTT] Disconnected from broker - will auto-reconnect");
         break;
 
     case MQTT_EVENT_SUBSCRIBED:
-        ESP_LOGI(TAG, "MQTT_EVENT_SUBSCRIBED, msg_id=%d", event->msg_id);
-        // msg_id = esp_mqtt_client_publish(client, "/topic/qos0", "data", 0, 0, 0);
-        // ESP_LOGI(TAG, "sent publish successful, msg_id=%d", msg_id);
+        ESP_LOGI(TAG, "[MQTT] Subscription confirmed (msg_id=%d)", event->msg_id);
+        ESP_LOGI(TAG, "[MQTT] Ready - waiting for commands...");
         break;
     case MQTT_EVENT_UNSUBSCRIBED:
-        ESP_LOGI(TAG, "MQTT_EVENT_UNSUBSCRIBED, msg_id=%d", event->msg_id);
+        ESP_LOGW(TAG, "[MQTT] Unsubscribed (msg_id=%d)", event->msg_id);
         break;
     case MQTT_EVENT_PUBLISHED:
-        ESP_LOGI(TAG, "MQTT_EVENT_PUBLISHED, msg_id=%d", event->msg_id);
+        ESP_LOGI(TAG, "[MQTT] Publish acknowledged (msg_id=%d)", event->msg_id);
         break;
     case MQTT_EVENT_DATA:
-        ESP_LOGI(TAG, "MQTT_EVENT_DATA");
-        printf("TOPIC=%.*s\r\n", event->topic_len, event->topic);
-        printf("DATA=%.*s\r\n", event->data_len, event->data);
-        sprintf((char *)received_message, "%.*s", event->data_len, event->data);
-        received_command = 1;
+        ESP_LOGI(TAG, "-------------------------------------");
+        ESP_LOGI(TAG, "[MQTT] Message received");
+        ESP_LOGI(TAG, "[MQTT] Topic  : %.*s", event->topic_len, event->topic);
+        ESP_LOGI(TAG, "[MQTT] Payload: %.*s", event->data_len, event->data);
+        ESP_LOGI(TAG, "[MQTT] Length : %d bytes", event->data_len);
+        ESP_LOGI(TAG, "-------------------------------------");
+        if (s_msg_mutex && xSemaphoreTake(s_msg_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+            size_t copy_len = (size_t)event->data_len < sizeof(received_message) - 1
+                              ? (size_t)event->data_len : sizeof(received_message) - 1;
+            memcpy(received_message, event->data, copy_len);
+            received_message[copy_len] = '\0';
+            received_command = true;
+            xSemaphoreGive(s_msg_mutex);
+        } else {
+            ESP_LOGW(TAG, "Failed to acquire mutex, MQTT message dropped");
+        }
         break;
     case MQTT_EVENT_ERROR:
-        ESP_LOGI(TAG, "MQTT_EVENT_ERROR");
+        ESP_LOGE(TAG, "[MQTT] Error event received");
         if (event->error_handle->error_type == MQTT_ERROR_TYPE_TCP_TRANSPORT)
         {
-            log_error_if_nonzero("reported from esp-tls", event->error_handle->esp_tls_last_esp_err);
-            log_error_if_nonzero("reported from tls stack", event->error_handle->esp_tls_stack_err);
-            log_error_if_nonzero("captured as transport's socket errno", event->error_handle->esp_transport_sock_errno);
-            ESP_LOGI(TAG, "Last errno string (%s)", strerror(event->error_handle->esp_transport_sock_errno));
+            log_error_if_nonzero("esp-tls", event->error_handle->esp_tls_last_esp_err);
+            log_error_if_nonzero("tls stack", event->error_handle->esp_tls_stack_err);
+            log_error_if_nonzero("socket errno", event->error_handle->esp_transport_sock_errno);
+            ESP_LOGE(TAG, "[MQTT] Socket error: %s",
+                     strerror(event->error_handle->esp_transport_sock_errno));
         }
         break;
     default:
-        ESP_LOGI(TAG, "Other event id:%d", event->event_id);
+        ESP_LOGD(TAG, "[MQTT] Unhandled event id=%d", event->event_id);
         break;
     }
+}
+
+static void run_ota(const char *url)
+{
+    ESP_LOGI(TAG, "=====================================");
+    ESP_LOGI(TAG, "[OTA] Starting OTA update");
+    ESP_LOGI(TAG, "[OTA] URL: %s", url);
+    ESP_LOGI(TAG, "=====================================");
+
+    esp_http_client_config_t http_config = {
+        .url = url,
+        .crt_bundle_attach = esp_crt_bundle_attach,
+        .buffer_size = 1024 * 12,
+        .buffer_size_tx = 1024 * 12,
+        .event_handler = _http_event_handler,
+        .keep_alive_enable = true,
+    };
+    esp_https_ota_config_t ota_config = {
+        .http_config = &http_config,
+    };
+
+    for (int attempt = 1; attempt <= OTA_MAX_RETRIES; attempt++)
+    {
+        ESP_LOGI(TAG, "[OTA] Attempt %d / %d  (free heap: %" PRIu32 " bytes)",
+                 attempt, OTA_MAX_RETRIES, esp_get_free_heap_size());
+
+        esp_https_ota_handle_t ota_handle = NULL;
+        esp_err_t err = esp_https_ota_begin(&ota_config, &ota_handle);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "[OTA] esp_https_ota_begin failed (0x%x)", err);
+            goto ota_retry;
+        }
+
+        int img_size = esp_https_ota_get_image_size(ota_handle);
+        if (img_size > 0) {
+            ESP_LOGI(TAG, "[OTA] Image size : %d bytes (%.1f KB)", img_size, img_size / 1024.0f);
+        } else {
+            ESP_LOGI(TAG, "[OTA] Image size : unknown - streaming...");
+        }
+
+        int last_logged_pct = -1;
+        while (true) {
+            err = esp_https_ota_perform(ota_handle);
+            if (err != ESP_ERR_HTTPS_OTA_IN_PROGRESS) {
+                break;
+            }
+            int bytes_read = esp_https_ota_get_image_len_read(ota_handle);
+            if (img_size > 0) {
+                int pct = (bytes_read * 100) / img_size;
+                if (pct - last_logged_pct >= 10) {
+                    ESP_LOGI(TAG, "[OTA] Downloading... %3d%%  (%d / %d bytes)",
+                             pct, bytes_read, img_size);
+                    last_logged_pct = pct;
+                }
+            }
+        }
+
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "[OTA] Perform failed (0x%x)", err);
+            esp_https_ota_abort(ota_handle);
+            goto ota_retry;
+        }
+
+        if (!esp_https_ota_is_complete_data_received(ota_handle)) {
+            ESP_LOGE(TAG, "[OTA] Incomplete image received");
+            esp_https_ota_abort(ota_handle);
+            goto ota_retry;
+        }
+
+        ESP_LOGI(TAG, "[OTA] Download complete (%d bytes) - verifying image...",
+                 esp_https_ota_get_image_len_read(ota_handle));
+        err = esp_https_ota_finish(ota_handle);
+        if (err == ESP_OK) {
+            ESP_LOGI(TAG, "=====================================");
+            ESP_LOGI(TAG, "[OTA] SUCCESS - Rebooting in 1s...");
+            ESP_LOGI(TAG, "=====================================");
+            vTaskDelay(pdMS_TO_TICKS(1000));
+            esp_restart();
+        } else if (err == ESP_ERR_OTA_VALIDATE_FAILED) {
+            ESP_LOGE(TAG, "[OTA] Image validation FAILED - firmware may be corrupt");
+        } else {
+            ESP_LOGE(TAG, "[OTA] esp_https_ota_finish failed (0x%x)", err);
+        }
+
+ota_retry:
+        if (attempt < OTA_MAX_RETRIES) {
+            ESP_LOGW(TAG, "[OTA] Waiting %d ms before retry...", OTA_RETRY_DELAY_MS);
+            vTaskDelay(pdMS_TO_TICKS(OTA_RETRY_DELAY_MS));
+        }
+    }
+
+    ESP_LOGE(TAG, "[OTA] All %d attempts failed - resuming MQTT", OTA_MAX_RETRIES);
 }
 
 static void mqtt_app_start(void)
@@ -154,6 +266,9 @@ static void mqtt_app_start(void)
     esp_mqtt_client_config_t mqtt_cfg = {
         .broker.address.uri = "mqtt://broker.emqx.io",
     };
+
+    s_msg_mutex = xSemaphoreCreateMutex();
+    configASSERT(s_msg_mutex);
 
     esp_mqtt_client_handle_t client = esp_mqtt_client_init(&mqtt_cfg);
     /* The last argument may be used to pass data to the event handler, in this example mqtt_event_handler */
@@ -164,75 +279,56 @@ static void mqtt_app_start(void)
     cJSON *json = NULL;
     cJSON *type = NULL;
     cJSON *parsed_message = NULL;
+    static uint8_t local_message[2048];
+    bool cmd = false;
     while (1)
     {
-        if (received_command)
+        cmd = false;
+        if (xSemaphoreTake(s_msg_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+            if (received_command) {
+                memcpy(local_message, received_message, sizeof(local_message));
+                received_command = false;
+                cmd = true;
+            }
+            xSemaphoreGive(s_msg_mutex);
+        }
+        if (cmd)
         {
-            json = cJSON_Parse((char *)received_message);
+            json = cJSON_Parse((char *)local_message);
             if (json == NULL)
             {
                 ESP_LOGE(TAG, "Error in Parsing Json message");
-                cJSON_Delete(json);
-                received_command = 0;
                 continue;
             }
             type = cJSON_GetObjectItemCaseSensitive(json, "type");
-            if (cJSON_IsNumber(type))
+            if (!cJSON_IsNumber(type) || type->valueint < 0 || type->valueint > 1)
             {
-                if (type->valueint > 1)
-                {
-                    ESP_LOGE(TAG, "Type of message is not available");
-                    cJSON_Delete(json);
-                    received_command = 0;
-                    continue;
-                }
+                ESP_LOGE(TAG, "Type field missing or out of range");
+                cJSON_Delete(json);
+                continue;
             }
             parsed_message = cJSON_GetObjectItemCaseSensitive(json, "message");
             if (!cJSON_IsString(parsed_message) || (parsed_message->valuestring == NULL))
             {
                 ESP_LOGE(TAG, "Message is not valid");
                 cJSON_Delete(json);
-                received_command = 0;
                 continue;
             }
             switch (type->valueint)
             {
             case 0: // Normal message job
-                ESP_LOGI(TAG, "Message Received : %s", parsed_message->valuestring);
+                ESP_LOGI(TAG, "[APP] ---- Normal Message ----");
+                ESP_LOGI(TAG, "[APP] Content  : %s", parsed_message->valuestring);
+                ESP_LOGI(TAG, "[APP] Free heap: %" PRIu32 " bytes", esp_get_free_heap_size());
                 cJSON_Delete(json);
-                received_command = 0;
                 break;
 
             case 1: // OTA Job
-                ESP_LOGI(TAG, "OTA JOB is Received");
+                ESP_LOGI(TAG, "[APP] OTA command received - stopping MQTT client...");
                 esp_mqtt_client_stop(client);
-
-                esp_http_client_config_t config = {
-                    .url = parsed_message->valuestring,
-                    .skip_cert_common_name_check = true,
-                    .buffer_size = 1024 * 12,
-                    .buffer_size_tx = 1024 * 12,
-                    .event_handler = _http_event_handler,
-                    .keep_alive_enable = true,
-                };
-
-                esp_https_ota_config_t ota_config = {
-                    .http_config = &config,
-                };
-
-                ESP_LOGI(TAG, "Attempting to download update from %s", parsed_message->valuestring);
-                esp_err_t ret = esp_https_ota(&ota_config);
-                if (ret == ESP_OK)
-                {
-                    ESP_LOGI(TAG, "OTA Succeed, Rebooting...");
-                    esp_restart();
-                }
-                else
-                {
-                    ESP_LOGE(TAG, "Firmware upgrade failed");
-                }
+                run_ota(parsed_message->valuestring);
+                ESP_LOGW(TAG, "[APP] OTA did not complete - resuming MQTT client...");
                 cJSON_Delete(json);
-                received_command = 0;
                 esp_mqtt_client_start(client);
                 break;
 
@@ -243,7 +339,7 @@ static void mqtt_app_start(void)
         }
         else
         {
-            vTaskDelay(100);
+            vTaskDelay(pdMS_TO_TICKS(100));
         }
     }
 }
@@ -262,10 +358,14 @@ void app_main(void)
         err = nvs_flash_init();
     }
 
-    ESP_LOGI(TAG, "[APP] Startup..");
-    ESP_LOGI(TAG, "[APP] Free memory: %" PRIu32 " bytes", esp_get_free_heap_size());
-    ESP_LOGI(TAG, "[APP] IDF version: %s", esp_get_idf_version());
-    //ESP_LOGI(TAG, "ESP_OTA_VERSION");
+    const esp_partition_t *running = esp_ota_get_running_partition();
+    ESP_LOGI(TAG, "=====================================");
+    ESP_LOGI(TAG, "[APP] ===   ESP MQTT OTA FIRMWARE V2  ===");
+    ESP_LOGI(TAG, "[APP] IDF version : %s", esp_get_idf_version());
+    ESP_LOGI(TAG, "[APP] Free heap   : %" PRIu32 " bytes", esp_get_free_heap_size());
+    ESP_LOGI(TAG, "[APP] Partition   : %s (offset=0x%08" PRIx32 ")",
+             running->label, running->address);
+    ESP_LOGI(TAG, "=====================================");
 
     esp_log_level_set("*", ESP_LOG_INFO);
     esp_log_level_set("mqtt_client", ESP_LOG_VERBOSE);
