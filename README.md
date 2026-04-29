@@ -1,6 +1,6 @@
 
-| Tested Targets | ESP32-C3 |
-| ----------------- | -------- |
+| Tested Targets | ESP32-C3 | ESP32-C6 |
+| ----------------- | -------- | -------- |
 
 # ESP-MQTT_OTA_EXAMPLE
 
@@ -8,7 +8,7 @@ This project aims to demonstrate how to implement Over-The-Air (OTA) firmware up
 
 ## Requirments
 
-* ESP-IDF 5.1 ( Other versions might work but API's can be different)
+* ESP-IDF 5.4 ( Other versions might work but API's can be different)
 * MQTTX (MQTT Testing Envoirment)
 * Google Drive (OTA binary file)
 
